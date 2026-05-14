@@ -1013,12 +1013,22 @@ class BlackBoardContent:
 
                 filename = file_data.get('fileName') or file_data.get('linkName')
                 if filename and filename.lower().endswith('.pdf'):
-                    # Look for the href in the same anchor tag
-                    href_pattern = rf'data-bbfile="{re.escape(match)}"[^>]*href="([^"]+)"'
-                    href_match = re.search(href_pattern, str(self.body))
+                    # Find the entire anchor tag that contains this data-bbfile attribute,
+                    # then extract href from anywhere within it (href may come before or after data-bbfile)
+                    anchor_pattern = rf'<a\s[^>]*data-bbfile="{re.escape(match)}"[^>]*>'
+                    anchor_match = re.search(anchor_pattern, str(self.body))
+                    if not anchor_match:
+                        # Also try with href before data-bbfile
+                        anchor_pattern = rf'<a\s[^>]*href="[^"]*"[^>]*data-bbfile="{re.escape(match)}"[^>]*>'
+                        anchor_match = re.search(anchor_pattern, str(self.body))
+                    href_url = None
+                    if anchor_match:
+                        href_in_tag = re.search(r'href="([^"]+)"', anchor_match.group(0))
+                        if href_in_tag:
+                            href_url = html.unescape(href_in_tag.group(1))
 
-                    if href_match:
-                        url = html.unescape(href_match.group(1))
+                    if href_url:
+                        url = href_url
                         pdf_links.append({
                             'url': url,
                             'filename': filename,
@@ -1027,17 +1037,21 @@ class BlackBoardContent:
             except:
                 pass
 
-        # Method 2: Look for direct PDF links in href attributes
-        pdf_href_pattern = r'href="([^"]*\.pdf[^"]*)"'
-        pdf_hrefs = re.findall(pdf_href_pattern, str(self.body), re.IGNORECASE)
-
-        for url in pdf_hrefs:
-            import html
-            url = html.unescape(url)
-            # Extract filename from URL
-            filename = url.split('/')[-1].split('?')[0]
-            if filename.lower().endswith('.pdf'):
-                # Avoid duplicates
+        # Method 2: Look for any anchor tags with application/pdf mime type
+        # that weren't already caught by Method 1 (handles signed bbcswebdav URLs
+        # where the URL itself doesn't end in .pdf)
+        import html as html_lib
+        # Find all anchor tags in the body
+        anchor_tags = re.findall(r'<a\s[^>]+>', str(self.body), re.IGNORECASE)
+        for tag in anchor_tags:
+            href_m = re.search(r'href="([^"]+)"', tag)
+            if not href_m:
+                continue
+            url = html_lib.unescape(href_m.group(1))
+            # Check for direct .pdf URL
+            url_path = url.split('?')[0]
+            if url_path.lower().endswith('.pdf'):
+                filename = url_path.split('/')[-1]
                 if not any(link['url'] == url for link in pdf_links):
                     pdf_links.append({
                         'url': url,
