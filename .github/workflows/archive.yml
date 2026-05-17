@@ -1,0 +1,108 @@
+name: Archive Blackboard
+
+on:
+  repository_dispatch:
+    types: [bb_archive]
+  workflow_dispatch:
+    inputs:
+      payload:
+        description: "JSON payload matching the bb_archive contract"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bb-archive-${{ github.event.client_payload.classCode || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install package
+        run: python -m pip install -e .
+
+      - name: Prepare payload
+        shell: bash
+        env:
+          EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+          MANUAL_PAYLOAD: ${{ inputs.payload }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            printf '%s' "$MANUAL_PAYLOAD" > "$RUNNER_TEMP/bb_payload.json"
+          else
+            printf '%s' "$EVENT_PAYLOAD" > "$RUNNER_TEMP/bb_payload.json"
+          fi
+          python - "$RUNNER_TEMP/bb_payload.json" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          for cookie in data.get("bbCookies", []):
+              value = cookie.get("value")
+              if value:
+                  print(f"::add-mask::{value}")
+          PY
+
+      - name: Restore current Pages branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf public
+          mkdir -p public
+          git fetch origin gh-pages:refs/remotes/origin/gh-pages || true
+          if git rev-parse --verify origin/gh-pages >/dev/null 2>&1; then
+            git archive origin/gh-pages | tar -x -C public
+            rm -rf public/assets public/index.html
+          fi
+
+      - name: Run async archive
+        run: >
+          python -m bb_archive scrape
+          --payload-file "$RUNNER_TEMP/bb_payload.json"
+          --output-dir public
+          --api-concurrency 16
+          --download-concurrency 6
+
+      - name: Build static viewer
+        run: |
+          npm ci
+          npm run build
+
+      - name: Publish gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+          force_orphan: false
+
+      - name: Notify Discord
+        if: always()
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          JOB_STATUS: ${{ job.status }}
+          CLASS_CODE: ${{ github.event.client_payload.classCode }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            exit 0
+          fi
+          export CONTENT="Blackboard archive ${JOB_STATUS} for ${CLASS_CODE:-manual run}: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          python -c 'import json, os; print(json.dumps({"content": os.environ["CONTENT"]}))' > "$RUNNER_TEMP/discord.json"
+          curl -fsS -H "Content-Type: application/json" -d @"$RUNNER_TEMP/discord.json" "$DISCORD_WEBHOOK_URL"

@@ -1,65 +1,55 @@
-set up :
-download zip
-and extract than navigate to the directory then :
-pip install -r requirements.txt  
+# ESPRIT Blackboard Archiver
 
+Async static archiver for ESPRIT Blackboard data. The repo is designed to run from
+GitHub Actions after `esprit-portal-v2` sends a `repository_dispatch` event with a
+short-lived Blackboard cookie payload.
 
+## Modes
 
-to run :
+- `html` saves Blackboard content pages and downloads referenced images locally. This is the default.
+- `attachments` downloads non-image files such as PDF, PPT, PPTX, DOCX, and ZIP.
+- `all` runs both modes.
 
+## Local Usage
 
-1 via api :
-  python esprit_blackboard_downloader.py 
+Create a local payload file that matches the dispatch contract, then run:
 
+```powershell
+python -m pip install -e ".[test]"
+python -m bb_archive scrape --payload-file payload.json --output-dir public
+npm install
+npm run build
+npm run preview
+```
 
+Payload shape:
 
-  
-2 web scrapper :
-  python slow_web_scraper.py
+```json
+{
+  "classCode": "4SAE11",
+  "mode": "html",
+  "bbCookies": [
+    { "name": "BbRouter", "value": "...", "domain": ".blackboard.com", "path": "/" }
+  ],
+  "source": "esprit-portal-v2",
+  "requestedAt": "2026-05-17T00:00:00.000Z",
+  "requestId": "uuid"
+}
+```
 
+Do not commit payload files, cookies, account credentials, generated downloads, or logs.
 
-  
+## GitHub Action
 
-debug :
+The workflow listens for:
 
+```json
+{
+  "event_type": "bb_archive",
+  "client_payload": { "...": "see payload above" }
+}
+```
 
-esprit_diagnostic.py
-
-
-esprit_deep_fetch.py
-
-
-esprit_debug_downloader.py
-
-
-
-
-
-
-other_debug_files.py
-
-
-
-
-
-note :
-
-
-
-ignore the main.py it's just an old file from a fork , you probably can delete it :< 
-
-
-
-if you have any questions contact lain456 on discord
-
-
-
-
-
-peace <3
-
-
-
-
-
-
+It scrapes into a Pages workspace, updates `classes.json`, publishes to the
+`gh-pages` branch as a Vite-built static viewer, and optionally sends a Discord
+webhook notification.
